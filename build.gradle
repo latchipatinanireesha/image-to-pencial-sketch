@@ -1,0 +1,173 @@
+plugins {
+    // Apply the application plugin to add support for building a CLI application in Java.
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.0.14'
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+    id "org.beryx.runtime" version "1.13.0"
+}
+
+apply plugin: 'org.openjfx.javafxplugin'
+apply plugin: 'com.github.johnrengelman.shadow'
+
+repositories {
+    mavenCentral()
+    flatDir {
+        dirs 'libs'
+    }
+}
+
+javafx {
+    version = javaFX_version
+    modules = [ 'javafx.base', 'javafx.controls', 'javafx.fxml', 'javafx.graphics', 'javafx.swing', 'javafx.web']
+}
+
+dependencies {
+    implementation "org.jetbrains:annotations:${jetbrains_version}"
+
+    //test dependencies
+    testImplementation "junit:junit:${junit_version}"
+
+    //shadowed dependencies
+    implementation "org.jfree:org.jfree.fxgraphics2d:${fxgraphics_version}"
+    implementation "com.itextpdf:itextpdf:${itext_version}"
+    implementation "org.imgscalr:imgscalr-lib:${imgscalr_version}"
+    implementation "com.google.code.gson:gson:${gson_version}"
+    implementation "org.locationtech.jts:jts-core:${jts_version}"
+    implementation "org.apache.xmlgraphics:batik-svggen:${xml_graphics_version}"
+    implementation "org.apache.xmlgraphics:batik-dom:${xml_graphics_version}"
+    implementation "com.jhlabs:filters:${jhlabs_version}"
+    implementation "org.joml:joml:${joml_version}"
+    implementation "org.jcodec:jcodec:${jcodec_version}"
+    implementation "org.jcodec:jcodec-javase:${jcodec_version}"
+    implementation "org.apache.bcel:bcel:${bcel_version}"
+    implementation "com.aparapi:aparapi:${aparapi_version}"
+    implementation "org.controlsfx:controlsfx:${controlsfx_version}"
+    implementation "org.sejda.imageio:webp-imageio:${webp_imageio_version}" //google webp support
+    implementation "org.fxmisc.easybind:easybind:${easy_bind_version}"
+    implementation "org.apache.commons:commons-lang3:${apache_commons_lang3}"
+
+    //// JOGL
+    implementation "org.jogamp.gluegen:gluegen-rt-main:${jogl_version}"
+    implementation "org.jogamp.jogl:jogl-all-main:${jogl_version}"
+}
+
+targetCompatibility = "19"
+sourceCompatibility = "19"
+
+project.setArchivesBaseName(app_name + "-" + app_version + "-" + app_state)
+project.setApplicationName(app_name)
+
+application {
+    mainClassName  = 'drawingbot.Launcher'
+    applicationName = 'drawingbot'
+    applicationDefaultJvmArgs = ["-Dprism.verbose=true", "-Dprism.maxvram=1G", "-Xmx16G", "-Dprism.maxTextureSize=0"]
+}
+
+runtime {
+
+    //using --compress=1 to avoid issues with zip.dll loading - see: https://bugs.openjdk.java.net/browse/JDK-8254920?attachmentViewMode=list
+    options = ['--strip-debug', '--compress', '1', '--no-header-files', '--no-man-pages']
+    modules = [
+            'java.sql',
+            'java.desktop',
+            'java.naming',
+            'java.compiler',
+            'java.scripting',
+            'java.logging',
+            'java.xml.crypto',
+            'jdk.unsupported.desktop',
+            'java.management',
+            'jdk.jfr',
+            'jdk.unsupported',
+            'java.datatransfer',
+            'java.xml',
+            'jdk.xml.dom', //for Documentation
+            'java.net.http', //for Documentation
+            'jdk.crypto.ec' //for Documentation / Changelog HTTPs connection
+    ]
+
+    jpackage{
+        def currentOs = org.gradle.internal.os.OperatingSystem.current()
+        def imgType = currentOs.windows ? 'ico' : currentOs.macOsX ? 'icns' : 'png'
+        imageOptions += ['--icon', "src/main/resources/images/icon.$imgType"]
+        appVersion = "$app_version"
+        installerOptions += ['--resource-dir', "src/main/resources"]
+        installerOptions += ['--vendor', 'Oliver Edward Lansdell']
+        installerOutputDir = file("$buildDir/jpackage-installers")
+        if(currentOs.windows) {
+            installerOptions += ['--win-dir-chooser', '--win-menu', '--win-shortcut']
+            installerType = 'msi'
+        }
+        else if (currentOs.linux) {
+            installerOptions += ['--linux-package-name', "drawingbotv3",'--linux-shortcut']
+        }
+        else if (currentOs.macOsX) {
+            imageOptions += ["--verbose"]
+            installerOptions += ["--verbose", '--mac-package-name', "drawingbotv3"]
+            if(project.hasProperty("developer")){
+                String id = project.getProperty("developer")
+                project.logger.lifecycle('Found a developer id, adding mac-signing')
+                imageOptions += ['--mac-sign', "--mac-signing-key-user-name", id]
+                installerOptions += ['--mac-sign', "--mac-signing-key-user-name", id]
+            }else{
+                project.logger.lifecycle('No developer id, disabling mac-signing')
+            }
+        }
+        installerOptions += ['--file-associations', "src/main/resources/jpackage/FAprojects.properties"]
+    }
+}
+
+task jpackageImageZip(type: Zip){
+    dependsOn(jpackageImage)
+    getArchiveFileName().set("${app_name + "-" + app_version + "-" + app_state + "-win"}.zip")
+    getDestinationDirectory().set(file("$buildDir/release"))
+
+    from "$buildDir/jpackage/$app_name"
+}
+
+task renameLaunchers (type: Copy) { //temporary, due to bug in wix toolset
+    dependsOn(jpackage)
+    from ("$buildDir/jpackage-installers")
+    into ("$buildDir/release")
+    def baseName = "$app_name" + "-" + "$app_version"
+
+    //windows
+    include "*.exe"
+    rename "(.*).exe", baseName + "-" + app_state + "-win" + ".exe"
+
+    include "*.msi"
+    rename "(.*).msi", baseName + "-" + app_state + "-win" + ".msi"
+
+    //mac
+    include "*.pkg"
+    rename "(.*).pkg", baseName + "-" + app_state + "-mac" + ".pkg"
+
+    //linux deb
+    include "*.deb"
+    rename "(.*).deb", baseName + "-" + app_state + "-linux" + ".deb"
+
+    //linux rpm
+    include "*.rpm"
+    rename "(.*).rpm", baseName + "-" + app_state + "-linux" + ".rpm"
+}
+
+task moveShadowJar (type: Copy) {
+    dependsOn(shadowJar)
+    from ("$buildDir/libs")
+    into ("$buildDir/release")
+
+    include app_name + "-" + app_version + "-" + app_state + "-all.jar"
+}
+
+task prepareRelease{
+    dependsOn(renameLaunchers)
+    dependsOn(moveShadowJar)
+}
+
+// Used after signing the .exe in the application image
+task rezipWindowsImage(type: Zip){
+    getArchiveFileName().set("${app_name + "-" + app_version + "-" + app_state + "-win"}.zip")
+    getDestinationDirectory().set(file("$buildDir/release"))
+
+    from "$buildDir/jpackage/$app_name"
+}
